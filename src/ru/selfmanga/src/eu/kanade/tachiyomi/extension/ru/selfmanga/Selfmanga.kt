@@ -18,7 +18,7 @@ class Selfmanga : ParsedHttpSource() {
 
     override val name = "Selfmanga"
 
-    override val baseUrl = "http://selfmanga.ru"
+    override val baseUrl = "https://selfmanga.ru"
 
     override val lang = "ru"
 
@@ -157,7 +157,11 @@ class Selfmanga : ParsedHttpSource() {
             val url = if (urlParts[1].isEmpty() && urlParts[2].startsWith("/static/")) {
                 baseUrl + urlParts[2]
             } else {
-                urlParts[1] + urlParts[0] + urlParts[2]
+                if (urlParts[1].endsWith("/manga/")) {
+                    urlParts[0] + urlParts[2]
+                } else {
+                    urlParts[1] + urlParts[0] + urlParts[2]
+                }
             }
             pages.add(Page(i++, "", url))
         }
@@ -185,7 +189,7 @@ class Selfmanga : ParsedHttpSource() {
     /* [...document.querySelectorAll("tr.advanced_option:nth-child(1) > td:nth-child(3) span.js-link")]
     *  .map(el => `Genre("${el.textContent.trim()}", $"{el.getAttribute('onclick')
     *  .substr(31,el.getAttribute('onclick').length-33)"})`).join(',\n')
-    *  on http://selfmanga.ru/search/advanced
+    *  on https://selfmanga.ru/search/advanced
     */
     override fun getFilterList() = FilterList(
             Category(getCategoryList()),

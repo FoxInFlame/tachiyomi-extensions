@@ -4,8 +4,8 @@ apply plugin: 'kotlin-android'
 ext {
     appName = 'Tachiyomi: NineManga'
     pkgNameSuffix = "all.ninemanga"
-    extClass = '.NineMangaEs; .NineMangaBr; .NineMangaEn; .NineMangaRu; .NineMangaDe; .NineMangaIt; .NineMangaFr'
-    extVersionCode = 2
+    extClass = '.NineMangaFactory'
+    extVersionCode = 8
     libVersion = '1.2'
 }
 

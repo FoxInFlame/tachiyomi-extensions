@@ -1,5 +1,8 @@
 package eu.kanade.tachiyomi.extension.en.mangahasu
 
+import android.util.Base64
+import com.github.salomonbrys.kotson.*
+import com.google.gson.JsonParser
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.Page
@@ -27,10 +30,10 @@ class Mangahasu: ParsedHttpSource() {
     override val client: OkHttpClient = network.cloudflareClient
 
     override fun popularMangaRequest(page: Int): Request =
-            GET("$baseUrl/directory.html?page=$page")
+            GET("$baseUrl/directory.html?page=$page", headers)
 
     override fun latestUpdatesRequest(page: Int): Request =
-            GET("$baseUrl/latest-releases.html?page=$page")
+            GET("$baseUrl/latest-releases.html?page=$page", headers)
 
     override fun popularMangaSelector() = "div.div_item"
 
@@ -54,7 +57,7 @@ class Mangahasu: ParsedHttpSource() {
     override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        return GET("$baseUrl/advanced-search.html?keyword=$query&author=&artist=&status=&typeid=&page=$page")
+        return GET("$baseUrl/advanced-search.html?keyword=$query&author=&artist=&status=&typeid=&page=$page", headers)
     }
 
     override fun searchMangaSelector() =
@@ -112,20 +115,38 @@ class Mangahasu: ParsedHttpSource() {
     }
 
     override fun pageListParse(document: Document): List<Page> {
-        val pages = mutableListOf<Page>()
-        var i = 0
-        document.select("div.img img").forEach { element ->
-            i++
-            pages.add(Page(i, "", element.attr("src")))
+
+        //Grab All Pages from site
+        //Some images are place holders on new chapters.
+		
+        val pages = mutableListOf<Page>().apply {
+            document.select("div.img img").forEach {
+                val pageNumber = it.attr("class").substringAfter("page").toInt()
+                add(Page(pageNumber,"",it.attr("src")))
+            }
         }
+
+        //Some images are not yet loaded onto Mangahasu's image server.
+        //Decode temporary URLs and replace placeholder images.
+		
+        val lstDUrls = document.select("script:containsData(lstDUrls)").html().substringAfter("lstDUrls").substringAfter("\"").substringBefore("\"")
+        if (lstDUrls != "W10="){ //Base64 = [] or empty file
+            val decoded = String(Base64.decode(lstDUrls,Base64.DEFAULT))
+            val json = JsonParser().parse(decoded).array
+            json.forEach {
+                val pageNumber = it["page"].int
+                pages.removeAll { page ->  page.index == pageNumber  }
+                pages.add(Page(pageNumber,"",it["url"].string))
+            }
+        }
+        pages.sortBy { page -> page.index }
         return pages
     }
 
     override fun imageUrlParse(document: Document) = ""
 
     override fun imageRequest(page: Page): Request {
-        val imgHeader = Headers.Builder().apply {
-            add("User-Agent", "Mozilla/5.0 (Windows NT 6.3; WOW64)")
+        val imgHeader = headers.newBuilder().apply {
             add("Referer", baseUrl)
         }.build()
         return GET(page.imageUrl!!, imgHeader)

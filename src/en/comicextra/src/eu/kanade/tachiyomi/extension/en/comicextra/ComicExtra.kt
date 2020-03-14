@@ -1,13 +1,14 @@
 package eu.kanade.tachiyomi.extension.en.comicextra
 
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -25,6 +26,8 @@ class ComicExtra : ParsedHttpSource() {
     override val lang = "en"
 
     override val supportsLatest = true
+
+    override val client: OkHttpClient = network.cloudflareClient
 
     private val datePattern = Pattern.compile("(\\d+) days? ago")
 
@@ -52,6 +55,8 @@ class ComicExtra : ParsedHttpSource() {
 
     private fun fetchThumbnailURL(url: String) = client.newCall(GET(url, headers)).execute().asJsoup().select("div.movie-l-img > img").attr("src")
 
+    private fun fetchChaptersFromNav(url: String) = client.newCall(GET(url, headers)).execute().asJsoup().select(chapterListSelector())
+
     override fun popularMangaNextPageSelector() = "div.general-nav > a:contains(Next)"
 
     override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
@@ -71,6 +76,7 @@ class ComicExtra : ParsedHttpSource() {
         manga.status = parseStatus(status)
         manga.author = document.select("dt:contains(Author:) + dd").text()
         manga.description = document.select("div#film-content").text()
+
         return manga
     }
 
@@ -78,6 +84,33 @@ class ComicExtra : ParsedHttpSource() {
         element.contains("Completed") -> SManga.COMPLETED
         element.contains("Ongoing") -> SManga.ONGOING
         else -> SManga.UNKNOWN
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+
+        val document = response.asJsoup()
+        val nav = document.getElementsByClass("general-nav").first()
+        val chapters = ArrayList<SChapter>()
+
+        document.select(chapterListSelector()).forEach {
+            chapters.add(chapterFromElement(it))
+        }
+
+        if (nav == null) {
+            return chapters
+        }
+
+        val links = nav.getElementsByTag("a")
+
+        links.forEach {
+            if (it.text() != "Next") {
+                fetchChaptersFromNav(it.attr("href")).forEach { page ->
+                    chapters.add(chapterFromElement(page))
+                }
+            }
+        }
+
+        return chapters
     }
 
     override fun chapterListSelector() = "table.table > tbody#list > tr:has(td)"
@@ -114,29 +147,18 @@ class ComicExtra : ParsedHttpSource() {
         return date.time
     }
 
+    override fun pageListRequest(chapter: SChapter): Request {
+        return GET(baseUrl + chapter.url + "/full", headers)
+    }
+
     override fun pageListParse(document: Document): List<Page> {
         val pages = mutableListOf<Page>()
-        val urls = document.select("select.full-select[name=page_select] > option")
 
-        for (element in urls) {
-            val url = element.attr("value")
-            if (url.isEmpty()) continue
-            pages.add(Page(index = Integer.valueOf(element.text()) - 1, url = url))
+        document.select("img.chapter_img").forEachIndexed { i, img ->
+            pages.add(Page(i, "", img.attr("abs:src")))
         }
         return pages
     }
-
-    override fun imageUrlRequest(page: Page) = GET(page.url)
-
-    override fun fetchImageUrl(page: Page) = client.newCall(imageUrlRequest(page))
-            .asObservableSuccess()
-            .map { realImageUrlParse(it) }!!
-
-    private fun realImageUrlParse(response: Response) = with(response.asJsoup()) {
-        getElementById("main_img").attr("src")
-    }!!
-
-    override fun imageUrlParse(response: Response) = throw UnsupportedOperationException("Unused method was called somehow!")
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException("Unused method was called somehow!")
 }

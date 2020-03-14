@@ -1,11 +1,14 @@
 package eu.kanade.tachiyomi.extension.ru.mangaonlinebiz
 
+import com.github.salomonbrys.kotson.float
+import com.github.salomonbrys.kotson.forEach
+import com.github.salomonbrys.kotson.string
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.github.salomonbrys.kotson.*
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.*
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -20,10 +23,19 @@ class MangaOnlineBiz : ParsedHttpSource() {
 
     override val lang = "ru"
 
-    override val supportsLatest = false
+    override val supportsLatest = true
+
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.92 Safari/537.36"
+
+    override fun headersBuilder(): Headers.Builder = Headers.Builder()
+        .add("User-Agent", userAgent)
+        .add("Referer", baseUrl)
 
     override fun popularMangaRequest(page: Int): Request =
-            GET("$baseUrl/genre/all/page/$page", headers)
+        GET("$baseUrl/genre/all/page/$page", headers)
+
+    override fun latestUpdatesRequest(page: Int): Request =
+        GET("$baseUrl/genre/all/order/new/page/$page")
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = if (query.isNotBlank()) {
@@ -42,7 +54,9 @@ class MangaOnlineBiz : ParsedHttpSource() {
         return GET(url, headers)
     }
 
-    override fun popularMangaSelector() = "div.genres a.genre"
+    override fun popularMangaSelector() = "a.genre"
+
+    override fun latestUpdatesSelector() = popularMangaSelector()
 
     override fun searchMangaParse(response: Response): MangasPage {
         if (!response.request().url().toString().contains("search-ajax")) {
@@ -80,8 +94,9 @@ class MangaOnlineBiz : ParsedHttpSource() {
         return manga
     }
 
+
     override fun latestUpdatesFromElement(element: Element): SManga =
-            popularMangaFromElement(element)
+        popularMangaFromElement(element)
 
     override fun searchMangaFromElement(element: Element): SManga = throw Exception("Not Used")
 
@@ -148,71 +163,70 @@ class MangaOnlineBiz : ParsedHttpSource() {
             return name
         }
     }
+
     private class GenreList(genres: Array<Genre>) : Filter.Select<Genre>("Genres", genres, 0)
+
     override fun getFilterList() = FilterList(
-            GenreList(getGenreList())
+        GenreList(getGenreList())
     )
+
     /*  [...document.querySelectorAll(".categories .item")]
     *     .map(el => `Genre("${el.textContent.trim()}", "${el.getAttribute('href')}")`).join(',\n')
     *   on https://manga-online.biz/genre/all/
     */
     private fun getGenreList() = arrayOf(
-            Genre("Все", "all"),
-            Genre("боевик", "boevik"),
-            Genre("боевые искусства", "boevye_iskusstva"),
-            Genre("вампиры", "vampiry"),
-            Genre("гарем", "garem"),
-            Genre("гендерная интрига", "gendernaya_intriga"),
-            Genre("героическое фэнтези", "geroicheskoe_fehntezi"),
-            Genre("детектив", "detektiv"),
-            Genre("дзёсэй", "dzyosehj"),
-            Genre("додзинси", "dodzinsi"),
-            Genre("драма", "drama"),
-            Genre("игра", "igra"),
-            Genre("история", "istoriya"),
-            Genre("меха", "mekha"),
-            Genre("мистика", "mistika"),
-            Genre("научная фантастика", "nauchnaya_fantastika"),
-            Genre("повседневность", "povsednevnost"),
-            Genre("постапокалиптика", "postapokaliptika"),
-            Genre("приключения", "priklyucheniya"),
-            Genre("психология", "psihologiya"),
-            Genre("романтика", "romantika"),
-            Genre("самурайский боевик", "samurajskij_boevik"),
-            Genre("сверхъестественное", "sverhestestvennoe"),
-            Genre("сёдзё", "syodzyo"),
-            Genre("сёдзё-ай", "syodzyo-aj"),
-            Genre("сёнэн", "syonen"),
-            Genre("спорт", "sport"),
-            Genre("сэйнэн", "sejnen"),
-            Genre("трагедия", "tragediya"),
-            Genre("триллер", "triller"),
-            Genre("ужасы", "uzhasy"),
-            Genre("фантастика", "fantastika"),
-            Genre("фэнтези", "fentezi"),
-            Genre("школа", "shkola"),
-            Genre("этти", "etti"),
-            Genre("юри", "yuri"),
-            Genre("военный", "voennyj"),
-            Genre("жосей", "zhosej"),
-            Genre("магия", "magiya"),
-            Genre("полиция", "policiya"),
-            Genre("смена пола", "smena-pola"),
-            Genre("супер сила", "super-sila"),
-            Genre("эччи", "echchi"),
-            Genre("яой", "yaoj"),
-            Genre("сёнэн-ай", "syonen-aj")
+        Genre("Все", "all"),
+        Genre("Боевик", "boevik"),
+        Genre("Боевые искусства", "boevye_iskusstva"),
+        Genre("Вампиры", "vampiry"),
+        Genre("Гарем", "garem"),
+        Genre("Гендерная интрига", "gendernaya_intriga"),
+        Genre("Героическое фэнтези", "geroicheskoe_fehntezi"),
+        Genre("Детектив", "detektiv"),
+        Genre("Дзёсэй", "dzyosehj"),
+        Genre("Додзинси", "dodzinsi"),
+        Genre("Драма", "drama"),
+        Genre("Игра", "igra"),
+        Genre("История", "istoriya"),
+        Genre("Меха", "mekha"),
+        Genre("Мистика", "mistika"),
+        Genre("Научная фантастика", "nauchnaya_fantastika"),
+        Genre("Повседневность", "povsednevnost"),
+        Genre("Постапокалиптика", "postapokaliptika"),
+        Genre("Приключения", "priklyucheniya"),
+        Genre("Психология", "psihologiya"),
+        Genre("Романтика", "romantika"),
+        Genre("Самурайский боевик", "samurajskij_boevik"),
+        Genre("Сверхъестественное", "sverhestestvennoe"),
+        Genre("Сёдзё", "syodzyo"),
+        Genre("Сёдзё-ай", "syodzyo-aj"),
+        Genre("Сёнэн", "syonen"),
+        Genre("Спорт", "sport"),
+        Genre("Сэйнэн", "sejnen"),
+        Genre("Трагедия", "tragediya"),
+        Genre("Триллер", "triller"),
+        Genre("Ужасы", "uzhasy"),
+        Genre("Фантастика", "fantastika"),
+        Genre("Фэнтези", "fentezi"),
+        Genre("Школа", "shkola"),
+        Genre("Этти", "etti"),
+        Genre("Юри", "yuri"),
+        Genre("Военный", "voennyj"),
+        Genre("Жосей", "zhosej"),
+        Genre("Магия", "magiya"),
+        Genre("Полиция", "policiya"),
+        Genre("Смена пола", "smena-pola"),
+        Genre("Супер сила", "super-sila"),
+        Genre("Эччи", "echchi"),
+        Genre("Яой", "yaoj"),
+        Genre("Сёнэн-ай", "syonen-aj")
     )
 
     override fun imageUrlParse(document: Document) = throw Exception("Not Used")
 
     override fun searchMangaSelector(): String = throw Exception("Not Used")
 
-    override fun latestUpdatesSelector(): String = throw Exception("Not Used")
-
     override fun chapterFromElement(element: Element): SChapter = throw Exception("Not Used")
 
     override fun pageListParse(document: Document): List<Page> = throw Exception("Not Used")
-
-    override fun latestUpdatesRequest(page: Int): Request = throw Exception("Not Used")
 }

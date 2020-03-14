@@ -1,14 +1,19 @@
 package eu.kanade.tachiyomi.extension.vi.nettruyen
 
+import android.util.Log
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.*
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.*
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
+import javax.crypto.spec.IvParameterSpec
+
 
 class NetTruyen : ParsedHttpSource() {
 
@@ -20,7 +25,15 @@ class NetTruyen : ParsedHttpSource() {
 
     override val supportsLatest = true
 
-    override val client: OkHttpClient = network.cloudflareClient
+    override val client = network.cloudflareClient.newBuilder().addInterceptor {
+        //Intercept any image requests and add a referer to them
+        //Enables bandwidth stealing feature
+        val request =
+                if (it.request().url().host().contains("cloud"))
+                    it.request().newBuilder().addHeader("Referer", baseUrl).build()
+                else it.request()
+        it.proceed(request)
+    }.build()!!
 
     override fun popularMangaSelector() = "#ctl00_divCenter div.items div.item"
 
@@ -39,7 +52,7 @@ class NetTruyen : ParsedHttpSource() {
         element.select("a").first().let {
             manga.setUrlWithoutDomain(it.attr("href"))
             manga.title = it.attr("title").replace("Truyện tranh", "").trim()
-            manga.thumbnail_url = it.select("img").first()?.attr("src")
+            manga.thumbnail_url = it.select("img").first()?.attr("data-original")
         }
         return manga
     }
@@ -106,7 +119,8 @@ class NetTruyen : ParsedHttpSource() {
         val chapter = SChapter.create()
         chapter.setUrlWithoutDomain(urlElement.attr("href"))
         chapter.name = urlElement.text()
-        chapter.date_upload = element.select(".col-xs-4.text-center").last()?.text()?.let { parseChapterDate(it) } ?: 0
+        chapter.date_upload = element.select(".col-xs-4.text-center").last()?.text()?.let { parseChapterDate(it) }
+                ?: 0
         return chapter
     }
 
@@ -116,12 +130,12 @@ class NetTruyen : ParsedHttpSource() {
             return if (date.contains(":")) {
                 // Format eg 17:02 20/04
                 val dateDM = date.split(" ")[1].split("/")
-                dates.set(dates.get(Calendar.YEAR), dateDM[1].toInt(), dateDM[0].toInt())
+                dates.set(dates.get(Calendar.YEAR), dateDM[1].toInt() - 1, dateDM[0].toInt())
                 dates.timeInMillis
             } else {
                 // Format eg 18/11/17
                 val dateDMY = date.split("/")
-                dates.set(2000 + dateDMY[2].toInt(), dateDMY[1].toInt(), dateDMY[0].toInt())
+                dates.set(2000 + dateDMY[2].toInt(), dateDMY[1].toInt() - 1, dateDMY[0].toInt())
                 dates.timeInMillis
             }
         } else {
@@ -143,11 +157,50 @@ class NetTruyen : ParsedHttpSource() {
         return 0L
     }
 
+    private fun decrypt(strToDecrypt: String, secret: String): String? {
+        try {
+            val k = secret + "x77_x6E_x50_x"
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            val keyBytes = k.toByteArray()
+            val secretKeySpec = SecretKeySpec(keyBytes, "AES")
+            val ivParameterSpec = IvParameterSpec(keyBytes)
+            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
+            return String(cipher.doFinal(android.util.Base64.decode(strToDecrypt, android.util.Base64.DEFAULT)))
+        }catch (e: Exception){
+             Log.e("Decrypt", "Has error $e")
+        }
+        return "https://www.upsieutoc.com/images/2019/09/20/1c1b688884689165b.png"
+    }
+
+    private fun getEncryptedPage(document: Document): List<Page> {
+        val pages = mutableListOf<Page>()
+        val scriptTag = document.select("#ctl00_divCenter > div > .container script").html()
+        val keyIndex = scriptTag.indexOf("var k=") + 5
+        val listIndex = scriptTag.indexOf("var l=") + 5
+        val key = scriptTag.substring(keyIndex + 2, scriptTag.indexOf('"', keyIndex+2))
+        val list = scriptTag.substring(listIndex + 1, scriptTag.indexOf(";", listIndex))
+        val jsonList = JSONArray(list)
+
+        for (i in 0 until jsonList.length()) {
+            val imageUrl = decrypt(jsonList.getString(i), key)
+            val imageUri = if (imageUrl!!.startsWith("//")) "http:$imageUrl" else imageUrl
+            pages.add(Page(pages.size, "", imageUri))
+        }
+        return pages
+    }
 
     override fun pageListParse(document: Document): List<Page> {
         val pages = mutableListOf<Page>()
         document.select(".page-chapter img").forEach {
-            pages.add(Page(pages.size, "", it.attr("src")))
+            val imageUrl = it.attr("data-original")
+            if (imageUrl.contains("1c1b688884689165b.png")) {
+                return getEncryptedPage(document)
+            }
+        }
+
+        document.select(".page-chapter img").forEach {
+            val imageUrl = it.attr("data-original")
+            pages.add(Page(pages.size, "", if (imageUrl.startsWith("//")) "http:$imageUrl" else imageUrl))
         }
         return pages
     }

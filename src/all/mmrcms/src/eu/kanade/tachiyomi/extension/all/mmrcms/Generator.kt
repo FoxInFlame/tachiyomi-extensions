@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.all.mmrcms
 
+import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.os.Build
 import com.google.gson.Gson
@@ -19,7 +20,7 @@ import javax.net.ssl.X509TrustManager
  * This class generates the sources for MMRCMS.
  * Credit to nulldev for writing the original shell script
  *
-# CMS: https://getcyberworks.com/product/manga-reader-cms/
+ * CMS: https://getcyberworks.com/product/manga-reader-cms/
  */
 
 class Generator {
@@ -30,11 +31,11 @@ class Generator {
         val dateTime = ZonedDateTime.now()
         val formattedDate = dateTime.format(DateTimeFormatter.RFC_1123_DATE_TIME)
         buffer.append("package eu.kanade.tachiyomi.extension.all.mmrcms")
-        buffer.append("\n\n// GENERATED FILE, DO NOT MODIFY!\n//Generated $formattedDate\n\n")
+        buffer.append("\n\n// GENERATED FILE, DO NOT MODIFY!\n// Generated $formattedDate\n\n")
         var number = 1
         sources.forEach {
             try {
-                var map = mutableMapOf<String, Any>()
+                val map = mutableMapOf<String, Any>()
                 map["language"] = it.first
                 map["name"] = it.second
                 map["base_url"] = it.third
@@ -47,7 +48,7 @@ class Generator {
                     parseCategories = parseCategories(advancedSearchDocument)
                 }
 
-                val homePageDocument = getDocument("${it.third}")!!
+                val homePageDocument = getDocument(it.third)!!
 
                 val itemUrl = getItemUrl(homePageDocument)
 
@@ -72,6 +73,7 @@ class Generator {
                     map["tags"] = tags
                 }
 
+                if (!itemUrl.startsWith(it.third)) println("**Note: ${it.second} URL does not match! Check for changes: \n ${it.third} vs $itemUrl")
 
                 val toJson = Gson().toJson(map)
 
@@ -109,11 +111,28 @@ class Generator {
     }
 
     private fun getDocument(url: String, printStackTrace: Boolean = true): Document? {
-        try {
+        val serverCheck = arrayOf("cloudflare-nginx", "cloudflare")
 
-            val response = getOkHttpClient().newCall(Request.Builder().url(url).build()).execute()
-            if (response.code() == 200) {
-                return Jsoup.parse(response.body()?.string())
+        try {
+            val request = Request.Builder().url(url)
+            getOkHttpClient().newCall(request.build()).execute().let { response ->
+                // Bypass Cloudflare ("Please wait 5 seconds" page)
+                if (response.code() == 503 && response.header("Server") in serverCheck) {
+                    var cookie = "${response.header("Set-Cookie")!!.substringBefore(";")}; "
+                    Jsoup.parse(response.body()!!.string()).let { document ->
+                        val path = document.select("[id=\"challenge-form\"]").attr("action")
+                        val chk = document.select("[name=\"s\"]").attr("value")
+                        getOkHttpClient().newCall(Request.Builder().url("$url/$path?s=$chk").build()).execute().let { solved ->
+                            cookie += solved.header("Set-Cookie")!!.substringBefore(";")
+                            request.addHeader("Cookie", cookie).build().let {
+                                return Jsoup.parse(getOkHttpClient().newCall(it).execute().body()?.string())
+                            }
+                        }
+                    }
+                }
+                if (response.code() == 200) {
+                    return Jsoup.parse(response.body()?.string())
+                }
             }
         } catch (e: Exception) {
             if (printStackTrace) {
@@ -129,9 +148,9 @@ class Generator {
         if (elements.isEmpty()) {
             return mutableListOf()
         }
-        var array = mutableListOf<Map<String, String>>()
+        val array = mutableListOf<Map<String, String>>()
         elements.forEach {
-            var map = mutableMapOf<String, String>()
+            val map = mutableMapOf<String, String>()
             map["id"] = it.attr("href").substringAfterLast("/")
             map["name"] = it.text()
             array.add(map)
@@ -148,19 +167,19 @@ class Generator {
     }
 
     private fun supportsLatest(third: String): Boolean {
-        getDocument("$third/filterList?page=1&sortBy=last_release&asc=false", false) ?: return false
-        return true
+        val document = getDocument("$third/latest-release?page=1", false) ?: return false
+        return document.select("div.mangalist div.manga-item a").isNotEmpty()
     }
 
     private fun parseCategories(document: Document): MutableList<Map<String, String>> {
-        var array = mutableListOf<Map<String, String>>()
-        var elements = document.select("select[name^=categories] option")
+        val array = mutableListOf<Map<String, String>>()
+        val elements = document.select("select[name^=categories] option, a.category")
         if (elements.size == 0) {
             return mutableListOf()
         }
         var id = 1
         elements.forEach {
-            var map = mutableMapOf<String, String>()
+            val map = mutableMapOf<String, String>()
             map["id"] = id.toString()
             map["name"] = it.text()
             array.add(map)
@@ -173,10 +192,12 @@ class Generator {
     @Throws(Exception::class)
     private fun getOkHttpClient(): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            @SuppressLint("TrustAllX509TrustManager")
             @Throws(CertificateException::class)
             override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {
             }
 
+            @SuppressLint("TrustAllX509TrustManager")
             @Throws(CertificateException::class)
             override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {
             }
@@ -205,118 +226,87 @@ class Generator {
     companion object {
         const val DRY_RUN = false
         val sources = listOf(
-                Triple("ar", "مانجا اون لاين", "https://www.on-manga.me"),
-                //Went offline
-                //Triple("ar", "Manga FYI", "http://mangafyi.com/manga/arabic"
-                //Now uses WPManga
-                //Triple("en", "Read Manhua", "https://readmanhua.net"),
-                Triple("en", "Read Comics Online", "http://readcomicsonline.ru"),
-                Triple("en", "Fallen Angels", "http://manga.fascans.com"),
-                //Went offline
-                //Triple("en", "MangaRoot", "http://mangaroot.com"),
-                Triple("en", "Mangawww Reader", "http://mangawww.club"),
-                //Went offline
-                //Triple("en", "MangaForLife", "http://manga4ever.com"),
-                //Went offline
-                //Triple("en", "Manga Spoil", "http://mangaspoil.com"),
-                //Went offline
-                //Triple("en", "MangaBlue", "http://mangablue.com"),
-                //Went offline
-                //Triple("en", "Manga Forest", "https://mangaforest.com"),
-                //Went offline
-                //Triple("en", "DManga", "http://dmanga.website"
-                //Now uses wpmanga
-                //Triple("en", "Chibi Manga Reader", "http://www.cmreader.info"),
-                Triple("en", "ZXComic", "http://zxcomic.com"),
-                //Went offline
-                //Triple("en", "DB Manga", "http://dbmanga.com"),
-                //Went offline
-                //Triple("en", "Mangacox", "http://mangacox.com"),
-
-                //Went offline
-                //Triple("en", "GO Manhwa", "http://gomanhwa.xyz"
-                //Went offline
-                //Triple("en", "KoManga", "https://komanga.net"
-                //Went offline
-                //Triple("en", "Manganimecan", "http://manganimecan.com"),
-                //Went offline
-                //Triple("en", "Hentai2Manga", "http://hentai2manga.com"),
-                Triple("en", "White Cloud Pavilion", "http://www.whitecloudpavilion.com/manga/free"),
-                //Went offline
-                //Triple("en", "4 Manga", "http://4-manga.com"),
-                //Went offline
-                //Triple("en", "XYXX.INFO", "http://xyxx.info"),
-                Triple("en", "MangaTreat Scans", "http://www.mangatreat.com"),
-                //Went offline
-                //Triple("en", "Isekai Manga Reader", "https://isekaimanga.club"),
-                Triple("es", "My-mangas.com", "https://my-mangas.com"),
-                Triple("es", "SOS Scanlation", "https://sosscanlation.com"),
-                //Went offline
-                //Triple("fa", "TrinityReader", "http://trinityreader.pw"
-                Triple("fr", "Manga-LEL", "https://www.manga-lel.com"),
-                Triple("fr", "Manga Etonnia", "https://www.etonnia.com"),
-                Triple("fr", "Scan FR", "http://www.scan-fr.io"),
-                Triple("fr", "Scan VF", "https://www.scan-vf.co"),
-                //Went offline
-                //Triple("fr", "ScanFR.com"), "http://scanfr.com"),
-                //Went offline
-                //Triple("fr", "Manga FYI", "http://mangafyi.com/manga/french"
-                //Went offline
-                //Triple("fr", "scans-manga", "http://scans-manga.com"),
-                //Went offline
-                //Triple("fr", "Henka no Kaze", "http://henkanokazelel.esy.es/upload"),
-                //Went offline
-                //Triple("fr", "Tous Vos Scans", "http://www.tous-vos-scans.com"),
-                //Went offline
-                //Triple("id", "Manga Desu", "http://mangadesu.net"
-                //Went offline
-                //Triple("id", "Komik Mangafire.ID", "http://go.mangafire.id"
-                //Went offline
-                //Triple("id", "MangaOnline", "https://mangaonline.web.id"),
-                //Went offline
-                //Triple("id", "MangaNesia", "https://manganesia.com"),
-                Triple("id", "Komikid", "http://www.komikid.com"),
-                //Now uses wpmanga
-                //Triple("id", "MangaID", "https://mangaid.me"
-                //Went offline
-                //Triple("id", "Manga Seru", "http://www.mangaseru.top"
-                //Went offline
-                //Triple("id", "Manga FYI", "http://mangafyi.com/manga/indonesian"
-                //Went offline
-                //Triple("id", "Bacamangaku", "http://www.bacamangaku.com"),
-                //Went offline
-                //Triple("id", "Indo Manga Reader", "http://indomangareader.com"),
-                //Protected by Cloudflare
-                //Triple("it", "Kingdom Italia Reader", "http://kireader.altervista.org"),
-                //Went offline
-                //Triple("ja", "IchigoBook", "http://ichigobook.com"),
-                //Went offline
-                //Triple("ja", "Mangaraw Online", "http://mangaraw.online"
-                //Now uses custom reader
-                //Triple("ja", "Mangazuki RAWS", "https://raws.mangazuki.co"),
-                Triple("ja", "RAW MANGA READER", "https://rawmanga.site"),
-                //Went offline
-                //Triple("ja", "MangaRAW", "https://www.mgraw.com"),
-                //Went offline
-                //Triple("ja", "マンガ/漫画 マガジン/雑誌 raw", "http://netabare-manga-raw.com"),
-                Triple("pl", "ToraScans", "http://torascans.pl"),
-                Triple("pt", "Comic Space", "https://www.comicspace.com.br"),
-                Triple("pt", "Mangás Yuri", "https://mangasyuri.net"),
-                Triple("pl", "Dracaena", "http://dracaena.webd.pl/czytnik"),
-                Triple("pl", "Nikushima", "http://azbivo.webd.pro"),
-                //Went offline
-                //Triple("ru", "NAKAMA", "http://nakama.ru"),
-                Triple("ru", "Anigai clan", "http://anigai.ru"),
-                //Went offline
-                //Triple("tr", "MangAoi", "http://mangaoi.com"),
-                Triple("tr", "MangaHanta", "http://mangahanta.com"),
-                //WEnt offline
-                //Triple("tr", "ManhuaTR", "http://www.manhua-tr.com"),
-                Triple("vi", "Fallen Angels Scans", "http://truyen.fascans.com"),
-                //Blocks bots (like this one)
-                //Triple("tr", "Epikmanga", "http://www.epikmanga.com"),
-                //NOTE: THIS SOURCE CONTAINS A CUSTOM LANGUAGE SYSTEM (which will be ignored)!
-                Triple("other", "HentaiShark", "https://www.hentaishark.com"))
+            Triple("ar", "مانجا اون لاين", "https://onma.me"),
+            Triple("en", "Read Comics Online", "https://readcomicsonline.ru"),
+            Triple("en", "Biamam Scans", "https://biamam.com/"),
+            Triple("en", "Fallen Angels", "https://manga.fascans.com"),
+            Triple("en", "Mangawww Reader", "https://mangawww.club"),
+            Triple("en", "White Cloud Pavilion", "https://www.whitecloudpavilion.com/manga/free"),
+            Triple("fr", "Scan FR", "https://www.scan-fr.co"),
+            Triple("fr", "Scan VF", "https://www.scan-vf.net"),
+            Triple("fr", "Scan OP","https://scan-op.com"),
+            Triple("id", "Komikid", "https://www.komikid.com"),
+            Triple("pl", "ToraScans", "http://torascans.pl"),
+            Triple("pt", "Comic Space", "https://www.comicspace.com.br"),
+            Triple("pt", "Mangás Yuri", "https://mangasyuri.net"),
+            Triple("pl", "Dracaena", "https://dracaena.webd.pl/czytnik"),
+            Triple("pl", "Nikushima", "http://azbivo.webd.pro"),
+            Triple("tr", "MangaHanta", "http://mangahanta.com"),
+            Triple("vi", "Fallen Angels Scans", "https://truyen.fascans.com"),
+            Triple("es", "LeoManga", "https://leomanga.me"),
+            Triple("es", "submanga", "https://submanga.li"),
+            Triple("es", "Mangadoor", "https://mangadoor.com"),
+            Triple("es", "Mangas.pw", "https://mangas.in"),
+            Triple("es", "Tumangaonline.co", "http://tumangaonline.fun"),
+            Triple("bg", "Utsukushii", "https://manga.utsukushii-bg.com"),
+            Triple("es", "Universo Yuri", "https://universoyuri.com"),
+            Triple("pl", "Phoenix-Scans", "https://phoenix-scans.pl"),
+            Triple("ru", "Japit Comics","https://j-comics.ru"),
+            //NOTE: THIS SOURCE CONTAINS A CUSTOM LANGUAGE SYSTEM (which will be ignored)!
+            Triple("other", "HentaiShark", "https://www.hentaishark.com"))
+            //Changed CMS
+            //Triple("en", "MangaTreat Scans", "http://www.mangatreat.com"),
+            //Triple("en", "Chibi Manga Reader", "https://www.cmreader.info"),
+            //Triple("tr", "Epikmanga", "https://www.epikmanga.com"),
+            //Triple("en", "Hatigarm Scans", "https://hatigarmscans.net"),
+            //Went offline
+            //Triple("ru", "Anigai clan", "http://anigai.ru"),
+            //Triple("en", "ZXComic", "http://zxcomic.com"),
+            //Triple("es", "SOS Scanlation", "https://sosscanlation.com"),
+            //Triple("es", "MangaCasa", "https://mangacasa.com"))
+            //Triple("ja", "RAW MANGA READER", "https://rawmanga.site"),
+            //Triple("ar", "Manga FYI", "http://mangafyi.com/manga/arabic"),
+            //Triple("en", "MangaRoot", "http://mangaroot.com"),
+            //Triple("en", "MangaForLife", "http://manga4ever.com"),
+            //Triple("en", "Manga Spoil", "http://mangaspoil.com"),
+            //Triple("en", "MangaBlue", "http://mangablue.com"),
+            //Triple("en", "Manga Forest", "https://mangaforest.com"),
+            //Triple("en", "DManga", "http://dmanga.website"),
+            //Triple("en", "DB Manga", "http://dbmanga.com"),
+            //Triple("en", "Mangacox", "http://mangacox.com"),
+            //Triple("en", "GO Manhwa", "http://gomanhwa.xyz"),
+            //Triple("en", "KoManga", "https://komanga.net"),
+            //Triple("en", "Manganimecan", "http://manganimecan.com"),
+            //Triple("en", "Hentai2Manga", "http://hentai2manga.com"),
+            //Triple("en", "4 Manga", "http://4-manga.com"),
+            //Triple("en", "XYXX.INFO", "http://xyxx.info"),
+            //Triple("en", "Isekai Manga Reader", "https://isekaimanga.club"),
+            //Triple("fa", "TrinityReader", "http://trinityreader.pw"),
+            //Triple("fr", "Manga-LEL", "https://www.manga-lel.com"),
+            //Triple("fr", "Manga Etonnia", "https://www.etonnia.com"),
+            //Triple("fr", "ScanFR.com"), "http://scanfr.com"),
+            //Triple("fr", "Manga FYI", "http://mangafyi.com/manga/french"),
+            //Triple("fr", "scans-manga", "http://scans-manga.com"),
+            //Triple("fr", "Henka no Kaze", "http://henkanokazelel.esy.es/upload"),
+            //Triple("fr", "Tous Vos Scans", "http://www.tous-vos-scans.com"),
+            //Triple("id", "Manga Desu", "http://mangadesu.net"),
+            //Triple("id", "Komik Mangafire.ID", "http://go.mangafire.id"),
+            //Triple("id", "MangaOnline", "https://mangaonline.web.id"),
+            //Triple("id", "MangaNesia", "https://manganesia.com"),
+            //Triple("id", "MangaID", "https://mangaid.me"
+            //Triple("id", "Manga Seru", "http://www.mangaseru.top"
+            //Triple("id", "Manga FYI", "http://mangafyi.com/manga/indonesian"
+            //Triple("id", "Bacamangaku", "http://www.bacamangaku.com"),
+            //Triple("id", "Indo Manga Reader", "http://indomangareader.com"),
+            //Triple("it", "Kingdom Italia Reader", "http://kireader.altervista.org"),
+            //Triple("ja", "IchigoBook", "http://ichigobook.com"),
+            //Triple("ja", "Mangaraw Online", "http://mangaraw.online"
+            //Triple("ja", "Mangazuki RAWS", "https://raws.mangazuki.co"),
+            //Triple("ja", "MangaRAW", "https://www.mgraw.com"),
+            //Triple("ja", "マンガ/漫画 マガジン/雑誌 raw", "http://netabare-manga-raw.com"),
+            //Triple("ru", "NAKAMA", "http://nakama.ru"),
+            //Triple("tr", "MangAoi", "http://mangaoi.com"),
+            //Triple("tr", "ManhuaTR", "http://www.manhua-tr.com"),
 
         val relativePath = System.getProperty("user.dir") + "/src/all/mmrcms/src/eu/kanade/tachiyomi/extension/all/mmrcms/GeneratedSources.kt"
         val relativePathTest = System.getProperty("user.dir") + "/src/all/mmrcms/TestGeneratedSources.kt"

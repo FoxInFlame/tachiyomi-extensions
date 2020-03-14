@@ -4,6 +4,7 @@ import com.squareup.duktape.Duktape
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.*
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -18,7 +19,7 @@ class Mangahere : ParsedHttpSource() {
 
     override val name = "Mangahere"
 
-    override val baseUrl = "http://www.mangahere.cc"
+    override val baseUrl = "https://www.mangahere.cc"
 
     override val lang = "en"
 
@@ -147,6 +148,11 @@ class Mangahere : ParsedHttpSource() {
             }
         }
 
+        // Get a chapter, check if the manga is licensed.
+        val aChapterURL = chapterFromElement(document.select(chapterListSelector()).first()).url
+        val aChapterDocument = client.newCall(GET("$baseUrl$aChapterURL", headers)).execute().asJsoup()
+        if (aChapterDocument.select("p.detail-block-content").hasText()) manga.status = SManga.LICENSED
+
         return manga
     }
 
@@ -161,102 +167,43 @@ class Mangahere : ParsedHttpSource() {
     }
 
     private fun parseChapterDate(date: String): Long {
-        return try {
-            SimpleDateFormat("MMM dd,yyyy", Locale.ENGLISH).parse(date).time
-        } catch (e: ParseException) {
-            0L
-        }
-    }
-
-    override fun pageListParse(document: Document): List<Page> {
-
-        val html = document.html()
-        val link = document.location()
-
-        val pages = mutableListOf<Page>()
-
-        val duktape = Duktape.create()
-
-        var secretKey = extractSecretKey(html, duktape)
-
-        val chapterIdStartLoc =  html.indexOf("chapterid")
-        val chapterId = html.substring(
-                chapterIdStartLoc + 11,
-                html.indexOf(";", chapterIdStartLoc)).trim()
-
-        val chapterPagesElement = document.select(".pager-list-left > span").first()
-        val pagesLinksElements = chapterPagesElement.select("a")
-        val pagesNumber = pagesLinksElements.get(pagesLinksElements.size - 2).attr("data-page").toInt()
-
-        val pageBase = link.substring(0, link.lastIndexOf("/"))
-
-        for (i in 1..pagesNumber){
-
-            val pageLink = "${pageBase}/chapterfun.ashx?cid=$chapterId&page=$i&key=$secretKey"
-
-            var responseText = ""
-
-            for (tr in 1..3){
-
-                val request = Request.Builder()
-                        .url(pageLink)
-                        .addHeader("Referer",link)
-                        .addHeader("Accept","*/*")
-                        .addHeader("Accept-Language","en-US,en;q=0.9")
-                        .addHeader("Connection","keep-alive")
-                        .addHeader("Host","www.mangahere.cc")
-                        .addHeader("User-Agent", System.getProperty("http.agent") ?: "")
-                        .addHeader("X-Requested-With","XMLHttpRequest")
-                        .build()
-
-                val response = client.newCall(request).execute()
-                responseText = response.body()!!.string()
-
-                if (responseText.isNotEmpty())
-                    break
-                else
-                    secretKey = ""
-
+        return if ("Today" in date || " ago" in date){
+            Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+        } else if ("Yesterday" in date) {
+            Calendar.getInstance().apply {
+                add(Calendar.DATE, -1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+        } else {
+            try {
+                SimpleDateFormat("MMM dd,yyyy", Locale.ENGLISH).parse(date).time
+            } catch (e: ParseException) {
+                0L
             }
-
-            val deobfuscatedScript = duktape.evaluate(responseText.removePrefix("eval")).toString()
-
-            val baseLinkStartPos = deobfuscatedScript.indexOf("pix=") + 5
-            val baseLinkEndPos = deobfuscatedScript.indexOf(";", baseLinkStartPos) - 1
-            val baseLink = deobfuscatedScript.substring(baseLinkStartPos, baseLinkEndPos)
-
-            val imageLinkStartPos = deobfuscatedScript.indexOf("pvalue=") + 9
-            val imageLinkEndPos = deobfuscatedScript.indexOf("\"", imageLinkStartPos)
-            val imageLink = deobfuscatedScript.substring(imageLinkStartPos, imageLinkEndPos)
-
-            pages.add(Page(i, "", "http:$baseLink$imageLink"))
-
         }
-
-        duktape.close()
-
-        return pages
     }
 
-    private fun extractSecretKey(html: String, duktape: Duktape): String {
-
-        val secretKeyScriptLocation = html.indexOf("eval(function(p,a,c,k,e,d)")
-        val secretKeyScriptEndLocation = html.indexOf("</script>", secretKeyScriptLocation)
-        val secretKeyScript = html.substring(secretKeyScriptLocation, secretKeyScriptEndLocation).removePrefix("eval")
-
-        val secretKeyDeobfuscatedScript = duktape.evaluate(secretKeyScript).toString()
-
-        val secretKeyStartLoc = secretKeyDeobfuscatedScript.indexOf("'")
-        val secretKeyEndLoc = secretKeyDeobfuscatedScript.indexOf(";")
-
-        val secretKeyResultScript = secretKeyDeobfuscatedScript.substring(
-                secretKeyStartLoc, secretKeyEndLoc)
-
-        return duktape.evaluate(secretKeyResultScript).toString()
-
+    override fun pageListRequest(chapter: SChapter): Request {
+        return GET("$baseUrl/${chapter.url}".replace("www","m"), headers)
     }
 
-    override fun imageUrlParse(document: Document) = document.getElementById("image").attr("src")
+    override fun pageListParse(document: Document): List<Page> =  mutableListOf<Page>().apply {
+        document.select("select option").forEach {
+            add(Page(size,"https:${it.attr("value")}"))
+        }
+    }
+
+    override fun imageUrlParse(document: Document): String {
+        return document.select("img#image").attr("src")
+    }
 
     private class Genre(title: String, val id: Int) : Filter.TriState(title)
 
